@@ -6,6 +6,7 @@ from PIL import ImageGrab, Image, ImageDraw
 import webview
 import webview.menu as wm
 import pystray
+import signal
 
 system_tray_icon = None
 sysicon = None
@@ -128,6 +129,8 @@ icon = pystray.Icon('google lens', icon=sysicon, title="Google lens",menu=pystra
 ))
 
 icon.run_detached()
+
+signal.signal(signal.SIGTERM, on_quit)   #This closes the app if running when the system shuts down
 
 
 carryon = True
