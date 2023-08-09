@@ -1,3 +1,4 @@
+import signal
 import time
 import requests
 import io
@@ -6,8 +7,21 @@ from PIL import ImageGrab, Image, ImageDraw
 import webview
 import webview.menu as wm
 import pystray
-import signal
+import win32event
+import win32api
+from winerror import ERROR_ALREADY_EXISTS
+import sys
 
+#to help in creating single instance
+
+mutex = win32event.CreateMutex(None, False, 'GoogleLens')
+last_error = win32api.GetLastError()
+
+if last_error == ERROR_ALREADY_EXISTS:
+    sys.exit(0)
+#-------------------------------------------------------------
+
+#To create systemtray icon
 system_tray_icon = None
 sysicon = None
 def systemtrayicon():
@@ -23,7 +37,10 @@ def systemtrayicon():
     im.save(buffer, format="PNG")
     system_tray_icon = buffer.getvalue()
 
+
+startTime = time.time()
 systemtrayicon()
+
 
 #some helpinng functions
 def generate_random_string(n):
@@ -69,12 +86,18 @@ def search_on_googlelens():
     return extract_url_from_string(response.text)
 
 
-windowstatus = True    #Certainly True when gui is open
+windowstatus = True    #Certainly True when gui is open / may be True when gui is close
+
+carryon = True     #This is used to stop while loops when quiting the app
 def custom_logic(loc_window):        #Main thread is blocked and a new thread is created to handle backend
     global prv_img, image_data, windowstatus
-    while True:
-        time.sleep(2)
-        new_clip = ImageGrab.grabclipboard()
+
+    while carryon:                  #This code checks in background if something is copied to clipboard when gui is open
+        time.sleep(1)
+        try:
+            new_clip = ImageGrab.grabclipboard()
+        except:
+            continue
         if not windowstatus:
                 windowstatus = True
                 return
@@ -87,13 +110,15 @@ def custom_logic(loc_window):        #Main thread is blocked and a new thread is
             loc_window.load_url(url)
 
 
-#window about button
+#window 'about' button
 def about():
-    webview.create_window("About", html="<h4>This desktop version is not<br/>directly published by google</h4>", width=400, height=200, easy_drag=True)
+    webview.create_window("About", html="<h4>This desktop version is not<br/>directly published by google.<br/>"
+                                        "Do not sign in.</h4>", width=400, height=200, easy_drag=True)
 
 menuItems = [
     wm.MenuAction("About", about),
 ]
+
 
 
 def newwindowprocess(url, loc_custom_logic):
@@ -107,10 +132,15 @@ prv_img = ImageGrab.grabclipboard()
 image_data = getting_image()
 URL = search_on_googlelens()
 
+
+endTime = time.time()
+
+print(endTime - startTime)
 window = webview.create_window("Google lens", url=URL, height=720, width=1280)
 
-webview.start(custom_logic, window, menu=menuItems)               #Main thread is blocked and the new thread is created
-windowstatus = False                  #The following lines execute on the main thread after the gui windows are closed
+webview.start(custom_logic, window, menu=menuItems, private_mode=False)   #Main thread is blocked and the new thread is created
+#The following lines execute on the main thread after the gui windows are closed
+windowstatus = False
 
 
 
@@ -124,18 +154,22 @@ def on_quit():
 
 
 #systemtray icon
+
 icon = pystray.Icon('google lens', icon=sysicon, title="Google lens",menu=pystray.Menu(
     pystray.MenuItem('Quit', on_quit),
 ))
 
 icon.run_detached()
 
+#-------------------------------------------------------------
+
 signal.signal(signal.SIGTERM, on_quit)   #This closes the app if running when the system shuts down
 
 
-carryon = True
+
+
 while carryon:
-    while carryon:
+    while carryon:             #This code checks in background if something is copied to clipboard when gui is closed
         try:
             new_clip = ImageGrab.grabclipboard()
         except:
@@ -143,7 +177,7 @@ while carryon:
             continue
         else:
             if new_clip is None or prv_img == new_clip:
-                time.sleep(2)
+                time.sleep(1)
             else:
                 break
     if not carryon:
@@ -151,10 +185,3 @@ while carryon:
     getting_image()
     url = search_on_googlelens()
     newwindowprocess(url, custom_logic)
-
-
-
-
-
-
-
