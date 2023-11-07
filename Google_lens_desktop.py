@@ -1,14 +1,17 @@
+import os
 import signal
+import string
 import time
+import random
 import requests
 import io
-import re
 from PIL import ImageGrab, Image, ImageDraw
 import webview
 import webview.menu as wm
 import pystray
 import win32event
 import win32api
+from bs4 import BeautifulSoup
 from winerror import ERROR_ALREADY_EXISTS
 import sys
 
@@ -43,18 +46,10 @@ systemtrayicon()
 
 
 #some helpinng functions
-def generate_random_string(n):
-    import random
-    import string
-    return ''.join(random.choices(string.ascii_lowercase + string.digits, k=n))
+def generate_random_string(length):
+    return ''.join(random.choice(string.ascii_letters + string.digits) for _ in range(length))
 
 
-def extract_url_from_string(text):
-    url_match = re.search(r'URL=(.*?)"', text)
-    if url_match:
-        return url_match.group(1)
-    else:
-        return None
 
 #---------------
 def getting_image():
@@ -69,21 +64,41 @@ def getting_image():
     finally:
         return image_data
 
-
-def search_on_googlelens():
+def search_on_google_lens():
     global image_data
-    form_data = {
-                    'encoded_image': ('image.png', image_data),
-                    'image_url': ('https://' + generate_random_string(12) + '.com/' + generate_random_string(12), b''),
-                    'sbisrc': 'Chromium 98.0.4725.0 Windows'
-                }
+    # Prepare a fake URL
 
-    response = requests.post(
-                        "https://lens.google.com/upload?ep=ccm&s=" + generate_random_string(
-                            12) + "&st=" + generate_random_string(12),
-                        files=form_data)
 
-    return extract_url_from_string(response.text)
+
+    fake_url = f"https://{generate_random_string(12)}.com/images/{generate_random_string(12)}"
+
+    # Set user-agent
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/98.0.4725.0 Safari/537.36',
+    }
+
+    # Send the image to Google Lens
+    try:
+        response = requests.post(f'https://lens.google.com/upload?ep=ccm&s=&st={generate_random_string(12)}',
+                                 data={'image_url': fake_url, 'sbisrc': 'Chromium 98.0.4725.0 Windows'},
+                                 files={'encoded_image': ('image.png', image_data, 'image/png')},
+                                 headers=headers)
+    except:
+        return ""
+
+    # Check if the request was successful
+    if response.status_code == 200:
+        # Parse the HTML response
+        soup = BeautifulSoup(response.text, 'html.parser')
+        meta_refresh = soup.find('meta', attrs={'http-equiv': 'refresh'})
+
+        if meta_refresh:
+            content = meta_refresh['content']
+            url = content.split(';')[1].strip()[4:]
+            return url
+
+    return ""
+
 
 
 windowstatus = True    #Certainly True when gui is open / may be True when gui is close
@@ -106,7 +121,7 @@ def custom_logic(loc_window):        #Main thread is blocked and a new thread is
         else:
             prv_img = new_clip
             image_data = getting_image()
-            url = search_on_googlelens()
+            url = "https://lens.google.com" + search_on_google_lens()
             loc_window.load_url(url)
 
 
@@ -130,12 +145,12 @@ def newwindowprocess(url, loc_custom_logic):
 
 prv_img = ImageGrab.grabclipboard()
 image_data = getting_image()
-URL = search_on_googlelens()
+URL = "https://lens.google.com" + search_on_google_lens()
 
 
-endTime = time.time()
 
-print(endTime - startTime)
+
+
 window = webview.create_window("Google lens", url=URL, height=720, width=1280)
 
 webview.start(custom_logic, window, menu=menuItems, private_mode=False)   #Main thread is blocked and the new thread is created
@@ -183,5 +198,5 @@ while carryon:
     if not carryon:
         break
     getting_image()
-    url = search_on_googlelens()
+    url = "https://lens.google.com" + search_on_google_lens()
     newwindowprocess(url, custom_logic)
