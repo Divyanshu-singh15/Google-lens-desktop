@@ -79,23 +79,24 @@ def search_on_google_lens():
 
     # Send the image to Google Lens
     try:
-        response = requests.post(f'https://lens.google.com/upload?ep=ccm&s=&st={generate_random_string(12)}',
+
+        response = requests.post(f"https://lens.google.com/v3/upload?s=4&re=df&stcs={generate_random_string(13)}",
                                  data={'image_url': fake_url, 'sbisrc': 'Chromium 98.0.4725.0 Windows'},
                                  files={'encoded_image': ('image.png', image_data, 'image/png')},
                                  headers=headers)
     except:
         return ""
 
-    # Check if the request was successful
     if response.status_code == 200:
-        # Parse the HTML response
-        soup = BeautifulSoup(response.text, 'html.parser')
-        meta_refresh = soup.find('meta', attrs={'http-equiv': 'refresh'})
+        html_content = response.text
+        search_start = html_content.index('Abrf')
+        part_after_search = html_content[search_start:]
 
-        if meta_refresh:
-            content = meta_refresh['content']
-            url = content.split(';')[1].strip()[4:]
-            return url
+        start = part_after_search.index('Abrf')
+        end = part_after_search.index('\\', start)
+
+        part_url = part_after_search[start:end]
+        return part_url
 
     return ""
 
@@ -121,7 +122,7 @@ def custom_logic(loc_window):        #Main thread is blocked and a new thread is
         else:
             prv_img = new_clip
             image_data = getting_image()
-            url = "https://lens.google.com" + search_on_google_lens()
+            url = "https://lens.google.com/search?ep=subb&re=df&s=4&p=" + search_on_google_lens()
             loc_window.load_url(url)
 
 
@@ -145,8 +146,7 @@ def newwindowprocess(url, loc_custom_logic):
 
 prv_img = ImageGrab.grabclipboard()
 image_data = getting_image()
-URL = "https://lens.google.com" + search_on_google_lens()
-
+URL = "https://lens.google.com/search?ep=subb&re=df&s=4&p=" + search_on_google_lens()
 
 
 
@@ -198,5 +198,5 @@ while carryon:
     if not carryon:
         break
     getting_image()
-    url = "https://lens.google.com" + search_on_google_lens()
+    url = "https://lens.google.com/search?ep=subb&re=df&s=4&p=" + search_on_google_lens()
     newwindowprocess(url, custom_logic)
