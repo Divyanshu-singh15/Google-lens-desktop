@@ -1,202 +1,247 @@
-import os
-import signal
-import string
-import time
-import random
-import requests
+import base64
+import hashlib
 import io
-from PIL import ImageGrab, Image, ImageDraw
+import signal
+import sys
+import time
+from dataclasses import dataclass
+from typing import Optional
+
+import pystray
 import webview
 import webview.menu as wm
-import pystray
-import win32event
 import win32api
-from bs4 import BeautifulSoup
+import win32event
+from PIL import Image, ImageDraw, ImageGrab
 from winerror import ERROR_ALREADY_EXISTS
-import sys
-
-#to help in creating single instance
-
-mutex = win32event.CreateMutex(None, False, 'GoogleLens')
-last_error = win32api.GetLastError()
-
-if last_error == ERROR_ALREADY_EXISTS:
-    sys.exit(0)
-#-------------------------------------------------------------
-
-#To create systemtray icon
-system_tray_icon = None
-sysicon = None
-def systemtrayicon():
-    global system_tray_icon, sysicon
-    buffer = io.BytesIO()
-    im = Image.new('RGB', (400, 400), (256, 256, 256))
-    draw = ImageDraw.Draw(im)
-    draw.rounded_rectangle((10, 10, 390, 390), outline="black",width=35, radius=100)
-    draw.rectangle((200, 200, 400, 400), fill="white")
-    draw.ellipse((125, 125, 275, 275), fill=(0,0,0))
-    draw.ellipse((275, 275, 325, 325), fill=(0,0,0))
-    sysicon = im
-    im.save(buffer, format="PNG")
-    system_tray_icon = buffer.getvalue()
 
 
-startTime = time.time()
-systemtrayicon()
+@dataclass
+class AppState:
+    window_active: bool = True
+    running: bool = True
+    image_data: Optional[bytes] = None
+    image_data_hash: Optional[str] = None
+    system_tray_icon: Optional[bytes] = None
+    system_icon: Optional[Image.Image] = None
 
 
-#some helpinng functions
-def generate_random_string(length):
-    return ''.join(random.choice(string.ascii_letters + string.digits) for _ in range(length))
+class GoogleLensApp:
+    def __init__(self):
+        self.state = AppState()
+        self.ensure_single_instance()
+        self.create_system_tray_icon()
+        self.setup_initial_window()
 
+    def ensure_single_instance(self):
+        mutex = win32event.CreateMutex(None, False, 'GoogleLens')
+        if win32api.GetLastError() == ERROR_ALREADY_EXISTS:
+            sys.exit(0)
 
+    def create_system_tray_icon(self):
+        """Create and initialize system tray icon"""
+        buffer = io.BytesIO()
+        im = Image.new('RGB', (400, 400), (256, 256, 256))
+        draw = ImageDraw.Draw(im)
 
-#---------------
-def getting_image():
-    global image_data
-    img = ImageGrab.grabclipboard()
-    img_bytes = io.BytesIO()
-    try:
-        img.save(img_bytes, format='PNG')
-        image_data = img_bytes.getvalue()
-    except:
-        image_data = system_tray_icon    #if no image in clipboard, this image is used
-    finally:
-        return image_data
+        # Draw icon elements
+        draw.rounded_rectangle((10, 10, 390, 390), outline="black", width=35, radius=100)
+        draw.rectangle((200, 200, 400, 400), fill="white")
+        draw.ellipse((125, 125, 275, 275), fill=(0, 0, 0))
+        draw.ellipse((275, 275, 325, 325), fill=(0, 0, 0))
 
-def search_on_google_lens():
-    global image_data
-    # Prepare a fake URL
+        self.state.system_icon = im
+        im.save(buffer, format="PNG")
+        self.state.system_tray_icon = buffer.getvalue()
 
+    @staticmethod
+    def get_image_from_clipboard() -> Optional[bytes]:
+        """Get image data from clipboard"""
+        img = ImageGrab.grabclipboard()
+        if not img:
+            return None
 
-
-    fake_url = f"https://{generate_random_string(12)}.com/images/{generate_random_string(12)}"
-
-    # Set user-agent
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/98.0.4725.0 Safari/537.36',
-    }
-
-    # Send the image to Google Lens
-    try:
-
-        response = requests.post(f"https://lens.google.com/v3/upload?s=4&re=df&stcs={generate_random_string(13)}",
-                                 data={'image_url': fake_url, 'sbisrc': 'Chromium 98.0.4725.0 Windows'},
-                                 files={'encoded_image': ('image.png', image_data, 'image/png')},
-                                 headers=headers)
-    except:
-        return ""
-
-    if response.status_code == 200:
-        html_content = response.text
-        search_start = html_content.index('Abrf')
-        part_after_search = html_content[search_start:]
-
-        start = part_after_search.index('Abrf')
-        end = part_after_search.index('\\', start)
-
-        part_url = part_after_search[start:end]
-        return part_url
-
-    return ""
-
-
-
-windowstatus = True    #Certainly True when gui is open / may be True when gui is close
-
-carryon = True     #This is used to stop while loops when quiting the app
-def custom_logic(loc_window):        #Main thread is blocked and a new thread is created to handle backend
-    global prv_img, image_data, windowstatus
-
-    while carryon:                  #This code checks in background if something is copied to clipboard when gui is open
-        time.sleep(1)
         try:
-            new_clip = ImageGrab.grabclipboard()
-        except:
-            continue
-        if not windowstatus:
-                windowstatus = True
+            img_bytes = io.BytesIO()
+            if img.mode == 'RGBA':
+                img = img.convert('RGB')
+            img.thumbnail((1000, 1000))
+            img.save(img_bytes, format='JPEG', quality=85)
+            return img_bytes.getvalue()
+        except Exception as e:
+            print(f"Error processing clipboard image: {e}")
+            return None
+
+    def generate_html_content(self) -> str:
+        """Generate HTML content for Google Lens submission"""
+        base64_data = base64.b64encode(self.state.image_data).decode('utf-8')
+        img = Image.open(io.BytesIO(self.state.image_data))
+        width, height = img.size
+
+        return f'''
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Submitting to Google Lens</title>
+            <style>
+                .loader-container {{
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                    height: 100vh;
+                    background-color: #f5f5f5;
+                }}
+                .loader {{
+                    border: 5px solid #f3f3f3;
+                    border-radius: 50%;
+                    border-top: 5px solid #3498db;
+                    width: 50px;
+                    height: 50px;
+                    animation: spin 1s linear infinite;
+                }}
+                .loading-text {{
+                    margin-left: 20px;
+                    font-family: Arial, sans-serif;
+                    font-size: 18px;
+                    color: #333;
+                }}
+                @keyframes spin {{
+                    0% {{ transform: rotate(0deg); }}
+                    100% {{ transform: rotate(360deg); }}
+                }}
+                #submission-form {{
+                    display: none;
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="loader-container">
+                <div class="loader"></div>
+                <div class="loading-text">Submitting to Google Lens...</div>
+            </div>
+
+            <form id="submission-form">
+                <script>
+                    (function() {{
+                        const base64_data = '{base64_data}';
+                        const byteArray = new Uint8Array([...atob(base64_data)].map(c => c.charCodeAt(0)));
+                        const blob = new Blob([byteArray], {{type: 'image/jpeg'}});
+
+                        const form = document.createElement("form");
+                        form.action = "https://lens.google.com/v3/upload?ep=ccm&s=&st=" + Date.now();
+                        form.method = "POST";
+                        form.enctype = "multipart/form-data";
+
+                        const fileInput = document.createElement("input");
+                        fileInput.type = "file";
+                        fileInput.name = "encoded_image";
+
+                        const dimensionsInput = document.createElement("input");
+                        dimensionsInput.type = "text";
+                        dimensionsInput.name = "processed_image_dimensions";
+                        dimensionsInput.value = "{width},{height}";
+
+                        const dataTransfer = new DataTransfer();
+                        dataTransfer.items.add(new File([blob], "image.jpg", {{ type: "image/jpeg" }}));
+                        fileInput.files = dataTransfer.files;
+
+                        form.append(fileInput, dimensionsInput);
+                        document.body.appendChild(form);
+                        form.submit();
+                    }})();
+                </script>
+            </form>
+        </body>
+        </html>
+        '''
+
+    def monitor_clipboard(self, window):
+        """Monitor clipboard for changes"""
+        while self.state.running:
+            time.sleep(1)
+            new_image_data = self.get_image_from_clipboard()
+            if not new_image_data:
+                continue
+
+            new_hash = hashlib.md5(new_image_data).hexdigest()
+            if not self.state.window_active:
+                self.state.window_active = True
                 return
-        elif new_clip is None or prv_img == new_clip:
-            pass
-        else:
-            prv_img = new_clip
-            image_data = getting_image()
-            url = "https://lens.google.com/search?ep=subb&re=df&s=4&p=" + search_on_google_lens()
-            loc_window.load_url(url)
 
+            if new_hash != self.state.image_data_hash:
+                self.state.image_data = new_image_data
+                self.state.image_data_hash = new_hash
+                window.load_html(self.generate_html_content())
 
-#window 'about' button
-def about():
-    webview.create_window("About", html="<h4>This desktop version is not<br/>directly published by google.<br/>"
-                                        "Do not sign in.</h4>", width=400, height=200, easy_drag=True)
+    def setup_initial_window(self):
+        """Set up the initial application window"""
+        self.state.image_data = self.get_image_from_clipboard() or self.state.system_tray_icon
+        self.state.image_data_hash = hashlib.md5(self.state.image_data).hexdigest()
 
-menuItems = [
-    wm.MenuAction("About", about),
-]
+        menu_items = [
+            wm.MenuAction("About", lambda: webview.create_window(
+                "About",
+                html="<h4>This desktop version is not directly published by Google.<br>Do not sign in.</h4>",
+                width=400,
+                height=200,
+                easy_drag=True
+            ))
+        ]
 
+        window = webview.create_window(
+            "Google Lens",
+            html=self.generate_html_content(),
+            height=720,
+            width=1280
+        )
 
+        webview.start(self.monitor_clipboard, window, menu=menu_items, private_mode=False)
+        self.state.window_active = False
 
-def newwindowprocess(url, loc_custom_logic):
-    global windowstatus
-    newwindow = webview.create_window("Google lens", url=url, height=720, width=1280)
-    webview.start(loc_custom_logic, newwindow, menu=menuItems)    #Main thread is blocked and the new thread is created                   #This line executes on the main thread after the gui windows are closed
-    windowstatus = False      #The following lines execute on the main thread after the gui windows are closed
+    def run(self):
+        """Run the application"""
 
+        def on_quit():
+            self.state.running = False
+            self.state.window_active = False
+            for window in webview.windows:
+                window.destroy()
+            icon.stop()
 
-prv_img = ImageGrab.grabclipboard()
-image_data = getting_image()
-URL = "https://lens.google.com/search?ep=subb&re=df&s=4&p=" + search_on_google_lens()
+        icon = pystray.Icon(
+            'google_lens',
+            icon=self.state.system_icon,
+            title="Google Lens",
+            menu=pystray.Menu(pystray.MenuItem('Quit', on_quit))
+        )
 
+        icon.run_detached()
+        signal.signal(signal.SIGTERM, lambda *args: on_quit())
 
+        while self.state.running:
+            self.main_loop()
 
-
-window = webview.create_window("Google lens", url=URL, height=720, width=1280)
-
-webview.start(custom_logic, window, menu=menuItems, private_mode=False)   #Main thread is blocked and the new thread is created
-#The following lines execute on the main thread after the gui windows are closed
-windowstatus = False
-
-
-
-def on_quit():
-    global windowstatus, carryon
-    for loc_window in webview.windows:
-        loc_window.destroy()
-    windowstatus = False
-    carryon = False
-    icon.stop()
-
-
-#systemtray icon
-
-icon = pystray.Icon('google lens', icon=sysicon, title="Google lens",menu=pystray.Menu(
-    pystray.MenuItem('Quit', on_quit),
-))
-
-icon.run_detached()
-
-#-------------------------------------------------------------
-
-signal.signal(signal.SIGTERM, on_quit)   #This closes the app if running when the system shuts down
-
-
-
-
-while carryon:
-    while carryon:             #This code checks in background if something is copied to clipboard when gui is closed
-        try:
-            new_clip = ImageGrab.grabclipboard()
-        except:
-            time.sleep(2)
-            continue
-        else:
-            if new_clip is None or prv_img == new_clip:
+    def main_loop(self):
+        """Main application loop"""
+        while self.state.running:
+            new_image_data = self.get_image_from_clipboard()
+            if not new_image_data:
                 time.sleep(1)
-            else:
+                continue
+
+            new_hash = hashlib.md5(new_image_data).hexdigest()
+            if new_hash != self.state.image_data_hash:
+                self.state.image_data = new_image_data
+                self.state.image_data_hash = new_hash
                 break
-    if not carryon:
-        break
-    getting_image()
-    url = "https://lens.google.com/search?ep=subb&re=df&s=4&p=" + search_on_google_lens()
-    newwindowprocess(url, custom_logic)
+            time.sleep(1)
+
+        if self.state.running:
+            html_content = self.generate_html_content()
+            window = webview.create_window("Google Lens", html=html_content, height=720, width=1280)
+            webview.start(self.monitor_clipboard, window)
+
+
+if __name__ == "__main__":
+    app = GoogleLensApp()
+    app.run()
