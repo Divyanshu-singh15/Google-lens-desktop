@@ -6,19 +6,15 @@ import sys
 import time
 from dataclasses import dataclass
 from typing import Optional
-
+from filelock import FileLock
 import pystray
 import webview
 import webview.menu as wm
-import win32api
-import win32event
 from PIL import Image, ImageDraw, ImageGrab
-from winerror import ERROR_ALREADY_EXISTS
 
 
 @dataclass
 class AppState:
-    window_active: bool = True
     running: bool = True
     image_data: Optional[bytes] = None
     image_data_hash: Optional[str] = None
@@ -34,9 +30,12 @@ class GoogleLensApp:
         self.setup_initial_window()
 
     def ensure_single_instance(self):
-        mutex = win32event.CreateMutex(None, False, 'GoogleLens')
-        if win32api.GetLastError() == ERROR_ALREADY_EXISTS:
-            sys.exit(0)
+        lock_file = "app.lock"
+        lock = FileLock(lock_file + ".lock")
+        try:
+            lock.acquire(timeout=0)  # Fail immediately if the lock is held
+        except:
+            sys.exit(0)  # Exit if another instance is running
 
     def create_system_tray_icon(self):
         """Create and initialize system tray icon"""
@@ -53,6 +52,24 @@ class GoogleLensApp:
         self.state.system_icon = im
         im.save(buffer, format="PNG")
         self.state.system_tray_icon = buffer.getvalue()
+        self.setup_tray()
+
+    def setup_tray(self):
+        def on_quit():
+            self.state.running = False
+            for each_window in webview.windows:
+                each_window.destroy()
+            icon.stop()
+
+        icon = pystray.Icon(
+            'google_lens',
+            icon=self.state.system_icon,
+            title="Google Lens",
+            menu=pystray.Menu(pystray.MenuItem('Quit', on_quit))
+        )
+        signal.signal(signal.SIGTERM, lambda *args: on_quit())
+
+        icon.run_detached()
 
     @staticmethod
     def get_image_from_clipboard() -> Optional[bytes]:
@@ -164,11 +181,9 @@ class GoogleLensApp:
                 continue
 
             new_hash = hashlib.md5(new_image_data).hexdigest()
-            if not self.state.window_active:
-                self.state.window_active = True
-                return
 
             if new_hash != self.state.image_data_hash:
+                window.show()
                 self.state.image_data = new_image_data
                 self.state.image_data_hash = new_hash
                 window.load_html(self.generate_html_content())
@@ -180,11 +195,87 @@ class GoogleLensApp:
 
         menu_items = [
             wm.MenuAction("About", lambda: webview.create_window(
-                "About",
-                html="<h4>This desktop version is not directly published by Google.<br>Do not sign in.</h4>",
-                width=400,
-                height=200,
-                easy_drag=True
+                "About Google Lens Desktop",
+                html="""
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <title>About Google Lens Desktop</title>
+                    <style>
+                        body {
+                            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+                            margin: 0;
+                            padding: 20px;
+                            background-color: #f8f9fa;
+                            color: #333;
+                        }
+                        .container {
+                            max-width: 600px;
+                            margin: 0 auto;
+                            background-color: white;
+                            padding: 24px;
+                            border-radius: 8px;
+                            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+                        }
+                        h2 {
+                            color: #1a73e8;
+                            margin-top: 0;
+                            margin-bottom: 16px;
+                        }
+                        .warning {
+                            background-color: #fef3f2;
+                            border-left: 4px solid #dc3545;
+                            padding: 12px 16px;
+                            margin: 16px 0;
+                            border-radius: 4px;
+                        }
+                        .info {
+                            background-color: #f0f7ff;
+                            border-left: 4px solid #1a73e8;
+                            padding: 12px 16px;
+                            margin: 16px 0;
+                            border-radius: 4px;
+                        }
+                        p {
+                            line-height: 1.5;
+                            margin: 8px 0;
+                        }
+                        .footer {
+                            margin-top: 20px;
+                            font-size: 0.9em;
+                            color: #666;
+                            text-align: center;
+                        }
+                    </style>
+                </head>
+                <body>
+                    <div class="container">
+                        <h2>About Google Lens Desktop</h2>
+
+                        <div class="warning">
+                            <p><strong>Important Notice:</strong> This is an unofficial desktop application and is not affiliated with or published by Google.</p>
+                            <p>For security reasons, please do not sign in to any Google accounts through this application.</p>
+                        </div>
+
+                        <div class="info">
+                            <p><strong>How to use:</strong></p>
+                            <p>1. Copy any image to your clipboard</p>
+                            <p>2. The app will automatically detect and submit it to Google Lens</p>
+                            <p>3. View your results directly in the application window</p>
+                        </div>
+
+                        <div class="footer">
+                            <p>Version 1.0.0</p>
+                            <p>This is a desktop wrapper for Google Lens web service</p>
+                        </div>
+                    </div>
+                </body>
+                </html>
+                """,
+                width=500,
+                height=450,
+                easy_drag=True,
+                resizable=False
             ))
         ]
 
@@ -195,53 +286,18 @@ class GoogleLensApp:
             width=1280
         )
 
+        def on_closing():
+            if self.state.running:
+                window.hide()
+                return False
+            else:
+                return True
+
+        window.events.closing += on_closing
+
         webview.start(self.monitor_clipboard, window, menu=menu_items, private_mode=False)
-        self.state.window_active = False
-
-    def run(self):
-        """Run the application"""
-
-        def on_quit():
-            self.state.running = False
-            self.state.window_active = False
-            for window in webview.windows:
-                window.destroy()
-            icon.stop()
-
-        icon = pystray.Icon(
-            'google_lens',
-            icon=self.state.system_icon,
-            title="Google Lens",
-            menu=pystray.Menu(pystray.MenuItem('Quit', on_quit))
-        )
-
-        icon.run_detached()
-        signal.signal(signal.SIGTERM, lambda *args: on_quit())
-
-        while self.state.running:
-            self.main_loop()
-
-    def main_loop(self):
-        """Main application loop"""
-        while self.state.running:
-            new_image_data = self.get_image_from_clipboard()
-            if not new_image_data:
-                time.sleep(1)
-                continue
-
-            new_hash = hashlib.md5(new_image_data).hexdigest()
-            if new_hash != self.state.image_data_hash:
-                self.state.image_data = new_image_data
-                self.state.image_data_hash = new_hash
-                break
-            time.sleep(1)
-
-        if self.state.running:
-            html_content = self.generate_html_content()
-            window = webview.create_window("Google Lens", html=html_content, height=720, width=1280)
-            webview.start(self.monitor_clipboard, window)
 
 
 if __name__ == "__main__":
     app = GoogleLensApp()
-    app.run()
+        
