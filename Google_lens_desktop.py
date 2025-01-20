@@ -3,6 +3,7 @@ import hashlib
 import io
 import signal
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -52,24 +53,7 @@ class GoogleLensApp:
         self.state.system_icon = im
         im.save(buffer, format="PNG")
         self.state.system_tray_icon = buffer.getvalue()
-        self.setup_tray()
 
-    def setup_tray(self):
-        def on_quit():
-            self.state.running = False
-            for each_window in webview.windows:
-                each_window.destroy()
-            icon.stop()
-
-        icon = pystray.Icon(
-            'google_lens',
-            icon=self.state.system_icon,
-            title="Google Lens",
-            menu=pystray.Menu(pystray.MenuItem('Quit', on_quit))
-        )
-        signal.signal(signal.SIGTERM, lambda *args: on_quit())
-
-        icon.run_detached()
 
     @staticmethod
     def get_image_from_clipboard() -> Optional[bytes]:
@@ -288,16 +272,36 @@ class GoogleLensApp:
 
         def on_closing():
             if self.state.running:
-                window.hide()
+                print("going to hide")
+                for each_window in webview.windows:
+                    threading.Thread(target=window.hide, daemon=True).start()
                 return False
             else:
                 return True
 
         window.events.closing += on_closing
 
+        self.setup_tray()
+
         webview.start(self.monitor_clipboard, window, menu=menu_items, private_mode=False)
+
+    def setup_tray(self):
+        def on_quit():
+            self.state.running = False
+            for each_window in webview.windows:
+                each_window.destroy()
+            icon.stop()
+
+        icon = pystray.Icon(
+            'google_lens',
+            icon=self.state.system_icon,
+            title="Google Lens",
+            menu=pystray.Menu(pystray.MenuItem('Quit', on_quit))
+        )
+        signal.signal(signal.SIGTERM, lambda *args: on_quit())
+
+        icon.run_detached()
 
 
 if __name__ == "__main__":
     app = GoogleLensApp()
-        
