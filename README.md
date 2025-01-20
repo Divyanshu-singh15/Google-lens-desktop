@@ -31,7 +31,7 @@ A lightweight desktop application that brings the power of Google Lens to your c
 
 ### 1. Clone this repository:
 ```bash
-git clone https://github.com/yourusername/google-lens-desktop
+git clone https://github.com/Divyanshu-singh15/Google-lens-desktop.git
 ```
 
 ### 2. Install required dependencies:
